@@ -35,6 +35,7 @@ from stock_strategies.night_session import (
     apply_night_filter,
     night_filter_note,
 )
+from stock_strategies.chips_filter import apply_chips_filter
 from stock_strategies.performance import update_performance, summary as perf_summary
 
 
@@ -89,6 +90,12 @@ def main():
     night_downgraded = apply_night_filter(results, night)
     if night_downgraded:
         print(f"🌙 昨晚夜盤大跌，{night_downgraded} 檔 BUY 已自動降為 WATCH")
+
+    # 4c. 套用三大法人籌碼濾鏡：法人連續賣超時 BUY 降為 WATCH
+    print("查詢三大法人籌碼...")
+    chips_downgraded = apply_chips_filter(results)
+    if chips_downgraded:
+        print(f"📊 法人連續賣超，{chips_downgraded} 檔 BUY 已自動降為 WATCH")
 
     order = {"BUY": 0, "WATCH": 1, "SKIP": 2, "ERROR": 3}
     results.sort(key=lambda x: (order.get(x.get("action"), 4), -x.get("signal_score", 0)))

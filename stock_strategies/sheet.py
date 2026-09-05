@@ -21,7 +21,9 @@ def read_watchlist() -> list[dict]:
     """從 Google Sheet Watchlist 分頁讀股票清單"""
     sh = get_gsheet()
     ws = sh.worksheet("Watchlist")
-    rows = ws.get_all_records()
+    # stock_id 欄位保留原始字串，避免像 0052、00947 這種代號被
+    # gspread 的自動數字轉換誤判成 52、947，吃掉前導零。
+    rows = ws.get_all_records(numericise_ignore=[1])
     enabled = [
         r for r in rows
         if str(r.get("enabled", "")).upper() in ("TRUE", "1", "YES")
