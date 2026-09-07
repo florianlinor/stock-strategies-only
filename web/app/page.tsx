@@ -116,7 +116,12 @@ export default function Dashboard() {
                 <ActionBadge action={r.action} />
                 <div className="font-mono w-16">{r.stock_id}</div>
                 <div className="flex-1 truncate">
-                  <div className="text-sm">{r.name}</div>
+                  <div className="text-sm flex items-center gap-2">
+                    {r.name}
+                    {r.action === "WATCH" && r.components?.fundamental_pass === false && (
+                      <span className="badge-warn shrink-0">基本面未過</span>
+                    )}
+                  </div>
                   <div className="text-xs text-muted">
                     {r.components?.tech_signals?.join(" · ") || "—"}
                   </div>

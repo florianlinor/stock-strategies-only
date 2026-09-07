@@ -31,42 +31,37 @@ def _trend_emoji(chg: float) -> str:
 
 
 def _format_stock_detail(s: dict, show_trend: bool = True) -> list[str]:
-    """格式化單檔股票的詳細資訊"""
+    """格式化單檔股票的詳細資訊（精簡版：每檔壓在 5-7 行內，量價型態併進來，
+    不再另外用一整則訊息重複同樣的股票清單）"""
     c = s.get("components", {})
     t = s.get("trend", {})
     lines = []
     wr = f"{c['backtest_winrate']*100:.0f}%" if c.get("backtest_winrate") else "N/A"
     fund = "✅" if c.get("fundamental_pass") else "❌"
 
-    lines.append(f"*{s['stock_id']} {s['name']}*  綜合 {s['signal_score']} 分")
+    lines.append(f"*{s['stock_id']} {s['name']}* — 綜合 {s['signal_score']} 分")
+
     if show_trend and t:
-        ma_status = ""
         if t.get("above_ma20") and t.get("above_ma60"):
             ma_status = "站上月季線"
         elif t.get("above_ma20"):
             ma_status = "站上月線"
         else:
             ma_status = "月線下"
-        vol_note = f"量能{'放大' if t.get('vol_ratio', 1) > 1.2 else '縮量' if t.get('vol_ratio', 1) < 0.8 else '持平'}"
-        lines.append(
-            f"{_trend_emoji(t.get('chg_5d', 0))} 5日{t.get('chg_5d', 0):+.1f}% | 20日{t.get('chg_20d', 0):+.1f}% | "
-            f"距高點{t.get('pct_from_high', 0):.0f}% | {ma_status} | {vol_note}"
-        )
+        lines.append(f"{_trend_emoji(t.get('chg_5d', 0))} 5日{t.get('chg_5d', 0):+.1f}% ・ {ma_status}")
+
     lines.append(
-        f"📌 *明日開盤進場* | 參考價 {s['entry_price']}"
+        f"📌 明日參考價 {s['entry_price']}　停損 {s['stop_loss_price']}　"
+        f"停利 {s['target_price']}　風報比 1:{s['risk_reward_ratio']}"
     )
     lines.append(
-        f"停損 {s['stop_loss_price']} (-{CONFIG['stop_loss']*100:.0f}%) / "
-        f"目標 {s['target_price']} (+{CONFIG['target_return']*100:.0f}%)"
-    )
-    lines.append(
-        f"風報比 1:{s['risk_reward_ratio']} | 建議部位 {s['position_size_pct']}%"
-    )
-    lines.append(
-        f"基本面{fund} | 技術分 {c.get('tech_score', 'N/A')} | 勝率 {wr} ({c.get('backtest_samples', 0)}次)"
+        f"基本面{fund}　技術 {c.get('tech_score', 'N/A')}分　勝率 {wr}"
+        + (f"（{c['backtest_samples']}次）" if c.get("backtest_samples") else "")
     )
     if c.get("tech_signals"):
-        lines.append(f"觸發: {', '.join(c['tech_signals'])}")
+        lines.append(f"🔧 {' · '.join(c['tech_signals'])}")
+    if c.get("volume_patterns"):
+        lines.append(f"📊 {' + '.join(c['volume_patterns'])}")
     if s.get("risk_notes"):
         lines.append(f"⚠️ {' / '.join(s['risk_notes'])}")
     return lines
@@ -87,8 +82,9 @@ def _explain_why(s: dict) -> str:
     return " / ".join(reasons)
 
 
-def _sector_summary(signals: list[dict], watchlist: list[dict]) -> list[str]:
-    """類股強弱分析"""
+def _sector_summary(signals: list[dict], watchlist: list[dict], max_lines: int = 12) -> list[str]:
+    """類股強弱分析。只列出「本輪有 BUY 或 WATCH」的族群 —— watchlist 檔數變多之後，
+    全部都是 SKIP 的族群列出來只是雜訊，直接濾掉、只在最後補一行提示略過幾個。"""
     cat_map = {str(w["stock_id"]): w.get("category", "其他") for w in watchlist}
     sectors = {}
     for s in signals:
@@ -104,11 +100,12 @@ def _sector_summary(signals: list[dict], watchlist: list[dict]) -> list[str]:
         elif s.get("action") == "WATCH":
             sectors[cat]["watch"] += 1
 
+    active = {cat: d for cat, d in sectors.items() if d["buy"] + d["watch"] > 0}
     ranked = sorted(
-        sectors.items(),
-        key=lambda x: np.mean(x[1]["chg_5d"]) if x[1]["chg_5d"] else 0,
+        active.items(),
+        key=lambda x: (x[1]["buy"], x[1]["watch"], np.mean(x[1]["chg_5d"]) if x[1]["chg_5d"] else 0),
         reverse=True,
-    )
+    )[:max_lines]
 
     lines = []
     for cat, d in ranked:
@@ -116,9 +113,11 @@ def _sector_summary(signals: list[dict], watchlist: list[dict]) -> list[str]:
         emoji = _trend_emoji(avg)
         total = len(d["stocks"])
         lines.append(
-            f"{emoji} *{cat}* ({total}檔) 5日均漲{avg:+.1f}% | "
-            f"BUY {d['buy']} WATCH {d['watch']}"
+            f"{emoji} *{cat}*（{total}檔）5日均漲{avg:+.1f}% ・ BUY{d['buy']} WATCH{d['watch']}"
         )
+    skipped = len(sectors) - len(active)
+    if skipped > 0:
+        lines.append(f"_（另有 {skipped} 個族群本輪無 BUY/WATCH，略過不列）_")
     return lines
 
 
@@ -214,8 +213,8 @@ def format_messages(
         msg2.append("")
 
     if watches:
-        top_watches = watches[:8]
-        rest_watches = watches[8:]
+        top_watches = watches[:5]
+        rest_watches = watches[5:]
         msg2.append(f"🟡 *WATCH — 接近訊號 TOP {len(top_watches)}*")
         msg2.append("")
         for s in top_watches:
@@ -281,90 +280,35 @@ def format_messages(
     msg3.append("_以上為系統自動分析，僅供參考，投資決策請自行判斷_")
     messages.append("\n".join(msg3))
 
-    # === 第四則：量價深度解析 (V3.1) ===
-    msg4 = _format_deep_analysis(signals, today)
-    messages.append(msg4)
+    # === 第四則：風險警示 —— 只在真的有「放量滯漲」時才發，避免每天重複同一份
+    # 量價字典、跟第二則重複列一次 BUY/WATCH（量價型態已經併進 _format_stock_detail）===
+    msg4 = _format_risk_warnings(signals, today)
+    if msg4:
+        messages.append(msg4)
 
     return messages
 
 
-def _format_deep_analysis(signals: list[dict], today: str) -> str:
-    """量價陣列深度解析（V3.1）"""
-    lines = [f"🔬 *量價深度解析* {today}", ""]
-
-    buys = [s for s in signals if s.get("action") == "BUY"]
-    watches = [s for s in signals if s.get("action") == "WATCH"]
-
-    has_patterns = lambda s: bool(s.get("components", {}).get("volume_patterns"))
+def _format_risk_warnings(signals: list[dict], today: str) -> str | None:
+    """風險警示：目前只偵測「放量滯漲」（高檔爆量但收黑，疑似主力倒貨）。
+    沒有任何標的觸發時直接回傳 None，當天就不會多發這則訊息。"""
     has_danger = lambda s: "放量滯漲" in s.get("components", {}).get("volume_patterns", [])
-
     danger_stocks = [s for s in signals if has_danger(s)]
+    if not danger_stocks:
+        return None
 
-    if buys:
-        lines.append("🟢 *BUY 深度解析*")
-        lines.append("")
-        for s in buys:
-            lines.extend(_format_volume_block(s))
-            lines.append("")
-
-    interesting_watches = [s for s in watches if has_patterns(s)]
-    if interesting_watches:
-        lines.append(f"🟡 *WATCH 量價解讀 ({len(interesting_watches)})*")
-        lines.append("")
-        for s in interesting_watches[:8]:
-            lines.extend(_format_volume_block(s))
-            lines.append("")
-
-    if danger_stocks:
-        lines.append("⚠️ *風險警示 — 放量滯漲*")
-        lines.append("")
-        for s in danger_stocks:
-            if s.get("action") in ("BUY", "WATCH") and has_patterns(s):
-                continue
-            lines.append(
-                f"• *{s['stock_id']} {s['name']}* ({s.get('action', '—')})"
-            )
-            c = s.get("components", {})
-            details = c.get("volume_details", {})
-            if "放量滯漲" in details:
-                lines.append(f"  ↳ {details['放量滯漲']}")
-            lines.append(f"  {c.get('volume_verdict', '')}")
-            lines.append("")
-
-    if not buys and not interesting_watches and not danger_stocks:
-        lines.append("_今日無顯著量價訊號_")
-        lines.append("")
-
-    lines.append("📖 *V3.1 量價字典速查*")
-    lines.append("• 倍量柱 = 今日量 ≥ 昨日 2x（主力點火）")
-    lines.append("• 梯量柱 = 連續 3 日量能遞增（健康上攻）")
-    lines.append("• 縮量柱 = 下跌時量能遞減（洗盤，主力未退）")
-    lines.append("• 低量柱 = 極限窒息量（拋壓耗盡）")
-    lines.append("• 放量滯漲 = 高檔爆量但 K 收黑（主力倒貨）")
-
+    lines = [f"⚠️ *風險警示 — 放量滯漲* {today}", ""]
+    for s in danger_stocks:
+        c = s.get("components", {})
+        details = c.get("volume_details", {})
+        lines.append(f"• *{s['stock_id']} {s['name']}*（{s.get('action', '—')}）")
+        if "放量滯漲" in details:
+            lines.append(f"  ↳ {details['放量滯漲']}")
+        if c.get("volume_verdict"):
+            lines.append(f"  {c['volume_verdict']}")
+    lines.append("")
+    lines.append("_高檔爆量但 K 收黑，疑似主力倒貨，追高風險較高_")
     return "\n".join(lines)
-
-
-def _format_volume_block(s: dict) -> list[str]:
-    """格式化單檔股票的量價區塊"""
-    c = s.get("components", {})
-    patterns = c.get("volume_patterns", [])
-    details = c.get("volume_details", {})
-    verdict = c.get("volume_verdict", "")
-
-    lines = [f"• *{s['stock_id']} {s['name']}* ({s.get('action')}, {s['signal_score']}分)"]
-
-    if patterns:
-        lines.append(f"  量能陣列: {' + '.join(patterns)}")
-        for p in patterns:
-            if p in details:
-                lines.append(f"  ↳ {details[p]}")
-    else:
-        lines.append("  量能陣列: 無特殊型態")
-
-    if verdict:
-        lines.append(f"  結論: {verdict}")
-    return lines
 
 
 def format_premarket(night: dict | None, signals: list[dict]) -> str:
